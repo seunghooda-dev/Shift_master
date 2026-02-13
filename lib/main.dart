@@ -1,7 +1,9 @@
 ﻿import 'dart:convert';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'desktop_image_helper.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -177,6 +179,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late final ShiftController _controller;
+  static const List<String> _imageExtensions = <String>['.png', '.jpg', '.jpeg', '.webp', '.bmp'];
 
   @override
   void initState() {
@@ -497,6 +500,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  String? _findDesktopImagePath(String baseName) {
+    return findDesktopImagePath(baseName, _imageExtensions);
+  }
+
+  Future<void> _openDesktopImage(BuildContext context, String baseName) async {
+    if (kIsWeb) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('웹에서는 바탕화면 파일 열기를 지원하지 않습니다.')),
+      );
+      return;
+    }
+
+    final path = _findDesktopImagePath(baseName);
+    if (path == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('바탕화면에 $baseName.(png/jpg/jpeg/webp/bmp) 파일이 없습니다.')),
+      );
+      return;
+    }
+
+    final opened = await launchUrl(
+      Uri.file(path),
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!context.mounted) return;
+    if (!opened) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$baseName 파일을 열지 못했습니다.')),
+      );
+    }
+  }
+
   void _showAddShiftSheet(BuildContext context, {DateTime? initialDate}) {
     showModalBottomSheet<void>(
       context: context,
@@ -527,6 +563,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   const SizedBox(height: 4),
                   const Text('\uc800\uc7a5\ud558\uba74 \ub2e4\uc74c \ub0a0\uc9dc\ub85c \uc790\ub3d9 \uc774\ub3d9\ud569\ub2c8\ub2e4.', style: TextStyle(fontSize: 12)),
                   const SizedBox(height: 8),
+                  const Text('\uadfc\ubb34 \uc124\uc815 \ucc38\uace0\uc0ac\uc9c4', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () => _openDesktopImage(context, '1'),
+                        icon: const Icon(Icons.photo),
+                        label: const Text('1 \uc0ac\uc9c4 \uc5f4\uae30'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () => _openDesktopImage(context, '2'),
+                        icon: const Icon(Icons.photo),
+                        label: const Text('2 \uc0ac\uc9c4 \uc5f4\uae30'),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
                   OutlinedButton.icon(
                     onPressed: () async {
                       final picked = await showDatePicker(
@@ -547,7 +602,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<ShiftType>(
-                    value: selected.type,
+                    initialValue: selected.type,
                     decoration: const InputDecoration(labelText: '\uadfc\ubb34 \uc885\ub958', border: OutlineInputBorder()),
                     items: ShiftType.values.map((t) => DropdownMenuItem<ShiftType>(value: t, child: Text(_shiftTypeLabel(t)))).toList(),
                     onChanged: (v) {
@@ -624,4 +679,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 }
+
+
+
+
 

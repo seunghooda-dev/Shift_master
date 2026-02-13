@@ -37,6 +37,7 @@ dependencies:
   firebase_core: ^3.12.1
   shared_preferences: ^2.3.5
   share_plus: ^10.1.0 # ICS 파일 공유용
+  url_launcher: ^6.3.1
 
 dev_dependencies:
   flutter_test:

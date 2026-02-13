@@ -10,8 +10,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shift_master/main.dart';
 
 void main() {
-  testWidgets('Auth wrapper renders', (WidgetTester tester) async {
+  testWidgets('App boots to dashboard', (WidgetTester tester) async {
     await tester.pumpWidget(const ShiftMasterApp());
-    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.byType(ShiftMasterApp), findsOneWidget);
+    expect(find.byType(DashboardScreen), findsOneWidget);
   });
 }
