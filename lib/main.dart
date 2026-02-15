@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +12,16 @@ Future<void> main() async {
 
 enum ShiftType { day, evening, night, off }
 enum Team { a, b }
+
+class _ShiftMasterTheme {
+  static const Color appBackground = Color(0xFFF7F7F9);
+  static const Color headerBackground = Color(0xFFE7897D);
+  static const Color toolbarBackground = Color(0xFFF1F2F6);
+  static const Color sheetBackground = Color(0xFFF6FBFF);
+  static const Color errorBannerBackground = Color(0xFFFFF1F0);
+  static const Color errorBannerForeground = Color(0xFFD92F2F);
+  static const Color dayCellBorder = Color(0xFFE8E8EE);
+}
 
 class ShiftEntry {
   final ShiftType type;
@@ -55,27 +65,49 @@ class ShiftController extends ChangeNotifier {
   Future<void> loadSettings() async {
     final prefs = await SharedPreferences.getInstance();
     final savedTeam = prefs.getString('selected_team');
-    if (savedTeam != null) _currentTeam = Team.values.byName(savedTeam);
+    _currentTeam = _parseTeam(savedTeam) ?? _currentTeam;
     _teamAName = prefs.getString('team_a_name') ?? 'A';
     _teamBName = prefs.getString('team_b_name') ?? 'B';
 
     final savedManual = prefs.getString('manual_shifts');
     if (savedManual != null) {
-      final decoded = jsonDecode(savedManual) as Map<String, dynamic>;
-      _manualEntries.clear();
-      decoded.forEach((k, v) {
-        if (v is String) {
-          _manualEntries[k] = ShiftEntry(type: ShiftType.values.byName(v));
-        } else if (v is Map<String, dynamic>) {
-          _manualEntries[k] = ShiftEntry(
-            type: ShiftType.values.byName((v['type'] ?? 'off') as String),
-            startTime: _parseTime(v['start'] as String?),
-            endTime: _parseTime(v['end'] as String?),
-          );
+      try {
+        final raw = jsonDecode(savedManual);
+        if (raw is Map) {
+          _manualEntries.clear();
+          raw.forEach((k, v) {
+            if (k is! String) return;
+            if (v is String) {
+              final type = ShiftType.values.where((t) => t.name == v).firstOrNull;
+              if (type != null) {
+                _manualEntries[k] = ShiftEntry(type: type);
+              }
+            } else if (v is Map<String, dynamic>) {
+              final type = ShiftType.values.where((t) => t.name == (v['type'] ?? 'off')).firstOrNull;
+              if (type == null) return;
+              _manualEntries[k] = ShiftEntry(
+                type: type,
+                startTime: _parseTime(v['start'] as String?),
+                endTime: _parseTime(v['end'] as String?),
+              );
+            }
+          });
         }
-      });
+      } catch (e, st) {
+        debugPrint('Failed to load manual shifts: $e');
+        debugPrint(st.toString());
+      }
     }
     notifyListeners();
+  }
+
+  Team? _parseTeam(String? value) {
+    if (value == null) return null;
+    try {
+      return Team.values.byName(value);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> toggleTeam() async {
@@ -96,9 +128,16 @@ class ShiftController extends ChangeNotifier {
 
   TimeOfDay? _parseTime(String? raw) {
     if (raw == null) return null;
-    final parts = raw.split(':');
-    if (parts.length != 2) return null;
-    return TimeOfDay(hour: int.parse(parts[0]), minute: int.parse(parts[1]));
+    try {
+      final parts = raw.split(':');
+      if (parts.length != 2) return null;
+      final hour = int.parse(parts[0]);
+      final minute = int.parse(parts[1]);
+      if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+      return TimeOfDay(hour: hour, minute: minute);
+    } catch (_) {
+      return null;
+    }
   }
 
   String? _formatTime(TimeOfDay? t) {
@@ -164,7 +203,7 @@ class ShiftMasterApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(useMaterial3: true, fontFamily: 'Pretendard'),
+      theme: ThemeData(useMaterial3: true),
       home: const DashboardScreen(),
     );
   }
@@ -179,12 +218,25 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late final ShiftController _controller;
+  late DateTime _displayMonth;
   static const List<String> _imageExtensions = <String>['.png', '.jpg', '.jpeg', '.webp', '.bmp'];
+  static const double _dayFontSize = 20;
+  static const double _dayCellAspectRatio = 1.22;
+  static const double _holidayDotOffsetY = 3;
+  static const double _holidayNameOffsetY = 5;
+  static const List<String> _holidayFontFallback = [
+    'Malgun Gothic',
+    'Apple SD Gothic Neo',
+    'Noto Sans KR',
+    'sans-serif',
+  ];
 
   @override
   void initState() {
     super.initState();
     _controller = ShiftController()..loadSettings();
+    final now = DateTime.now();
+    _displayMonth = DateTime(now.year, now.month, 1);
   }
 
   @override
@@ -257,6 +309,147 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return kr2026[key];
   }
 
+  Widget _buildMonthCell(BuildContext context, DateTime? d, DateTime today, {required bool enableInteraction}) {
+    if (d == null) {
+      return Container(decoration: BoxDecoration(border: Border.all(color: _ShiftMasterTheme.dayCellBorder)));
+    }
+
+    final isToday = DateTime(d.year, d.month, d.day) == today;
+    final entry = _controller.getEntryForDate(d);
+    final holiday = _koreanHoliday(d);
+    final holidayDot = Container(
+      width: 20,
+      height: 20,
+      decoration: const BoxDecoration(
+        color: Color(0xFFE55063),
+        shape: BoxShape.circle,
+      ),
+      alignment: Alignment.center,
+      child: const Text(
+        '\uacf5',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          height: 1,
+          fontFamilyFallback: _holidayFontFallback,
+        ),
+        textAlign: TextAlign.center,
+      ),
+    );
+    final holidayNameText = Text(
+      holiday ?? '',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(
+        color: Color(0xFFD93E53),
+        fontSize: 16,
+        fontWeight: FontWeight.w800,
+        height: 1,
+        fontFamilyFallback: _holidayFontFallback,
+      ),
+    );
+
+    return InkWell(
+      onTap: enableInteraction ? () => _showAddShiftSheet(context, initialDate: d) : null,
+      child: Container(
+      decoration: BoxDecoration(
+          border: Border.all(color: _ShiftMasterTheme.dayCellBorder),
+          color: Colors.white,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 1, 2, 1),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${d.day}',
+                    style: TextStyle(
+                      fontSize: _dayFontSize,
+                      color: isToday ? Colors.black : const Color(0xFF888888),
+                      fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
+                    ),
+                  ),
+                  if (holiday != null) const SizedBox(width: 3),
+                  if (holiday != null)
+                    Transform.translate(
+                      offset: const Offset(0, _holidayDotOffsetY),
+                      child: holidayDot,
+                    ),
+                  if (holiday != null) const SizedBox(width: 3),
+                  if (holiday != null)
+                    Expanded(
+                      child: Transform.translate(
+                        offset: const Offset(0, _holidayNameOffsetY),
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          child: holidayNameText,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Container(
+                width: double.infinity,
+                margin: const EdgeInsets.fromLTRB(1, 0, 1, 1),
+                color: _fillColor(entry.type),
+                child: Center(
+                  child: Text(
+                    _symbol(entry.type),
+                    style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800, height: 1),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMonthGrid(List<DateTime?> cells, DateTime today, {required bool enableInteraction, required bool faded}) {
+    final grid = GridView.builder(
+      padding: EdgeInsets.zero,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: cells.length,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 7,
+        mainAxisSpacing: 0,
+        crossAxisSpacing: 0,
+        childAspectRatio: _dayCellAspectRatio,
+      ),
+      itemBuilder: (context, i) => _buildMonthCell(context, cells[i], today, enableInteraction: enableInteraction),
+    );
+
+    if (!faded) return grid;
+
+    return Opacity(
+      opacity: 0.45,
+      child: IgnorePointer(
+        ignoring: !enableInteraction,
+        child: grid,
+      ),
+    );
+  }
+
+  DateTime _monthFromOffset(int offset) {
+    final baseIndex = _displayMonth.year * 12 + (_displayMonth.month - 1) + offset;
+    final year = baseIndex ~/ 12;
+    final month = (baseIndex % 12) + 1;
+    return DateTime(year, month, 1);
+  }
+
+  void _shiftMonth(int offset) {
+    setState(() {
+      _displayMonth = _monthFromOffset(offset);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -264,11 +457,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
       builder: (context, _) {
         final now = DateTime.now();
         final today = DateTime(now.year, now.month, now.day);
-        final cells = _monthCells(now);
+        final displayMonth = DateTime(_displayMonth.year, _displayMonth.month, 1);
+        final cells = _monthCells(displayMonth);
+        final nextMonthCells = _monthCells(_monthFromOffset(1)).take(14).toList();
         const week = ['\uc77c', '\uc6d4', '\ud654', '\uc218', '\ubaa9', '\uae08', '\ud1a0'];
+        final nextMonthPreviewHeight = (MediaQuery.of(context).size.width / 7) / _dayCellAspectRatio * 2;
 
         return Scaffold(
-          backgroundColor: const Color(0xFFF7F7F9),
+          backgroundColor: _ShiftMasterTheme.appBackground,
           body: SafeArea(
             child: Column(
               children: [
@@ -276,16 +472,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   width: double.infinity,
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                   decoration: const BoxDecoration(
-                    color: Color(0xFFE7897D),
+                    color: _ShiftMasterTheme.headerBackground,
                     borderRadius: BorderRadius.vertical(bottom: Radius.circular(12)),
                   ),
                   child: Row(
                     children: [
-                      Text(
-                        '${now.year}\ub144 ${now.month.toString().padLeft(2, '0')}\uc6d4',
-                        style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                      Expanded(
+                        child: Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                onPressed: () => _shiftMonth(-1),
+                                icon: const Icon(Icons.chevron_left, color: Colors.white),
+                                tooltip: '이전 월',
+                              ),
+                              Text(
+                                '${displayMonth.year}\ub144 ${displayMonth.month.toString().padLeft(2, '0')}\uc6d4',
+                                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800),
+                              ),
+                              IconButton(
+                                onPressed: () => _shiftMonth(1),
+                                icon: const Icon(Icons.chevron_right, color: Colors.white),
+                                tooltip: '다음 월',
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
-                      const Spacer(),
                       GestureDetector(
                         onLongPress: () => _showTeamNameDialog(context),
                         child: Row(
@@ -318,106 +532,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 Expanded(
-                  child: GridView.builder(
-                    padding: EdgeInsets.zero,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: cells.length,
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 7,
-                      mainAxisSpacing: 0,
-                      crossAxisSpacing: 0,
-                      childAspectRatio: 1.22,
-                    ),
-                    itemBuilder: (context, i) {
-                      final d = cells[i];
-                      if (d == null) {
-                        return Container(decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE8E8EE))));
-                      }
-                      final isToday = DateTime(d.year, d.month, d.day) == today;
-                      final entry = _controller.getEntryForDate(d);
-                      final holiday = _koreanHoliday(d);
-                      return InkWell(
-                        onTap: () => _showAddShiftSheet(context, initialDate: d),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(color: const Color(0xFFE8E8EE)),
-                            color: Colors.white,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(4, 1, 2, 1),
-                                child: Row(
-                                  children: [
-                                    Text(
-                                      '${d.day}',
-                                      style: TextStyle(
-                                        fontSize: 20,
-                                        color: isToday ? Colors.black : const Color(0xFF888888),
-                                        fontWeight: isToday ? FontWeight.w800 : FontWeight.w600,
-                                      ),
-                                    ),
-                                    if (holiday != null) const SizedBox(width: 3),
-                                    if (holiday != null)
-                                      Container(
-                                        width: 20,
-                                        height: 20,
-                                        decoration: const BoxDecoration(
-                                          color: Color(0xFFE55063),
-                                          shape: BoxShape.circle,
-                                        ),
-                                        alignment: Alignment.center,
-                                        child: const Text(
-                                          '\uacf5',
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 12,
-                                            fontWeight: FontWeight.w800,
-                                            height: 1,
-                                          ),
-                                          textAlign: TextAlign.center,
-                                        ),
-                                      ),
-                                    if (holiday != null) const SizedBox(width: 3),
-                                    if (holiday != null)
-                                      Expanded(
-                                        child: Text(
-                                          holiday,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            color: Color(0xFFD93E53),
-                                            fontSize: 20,
-                                            fontWeight: FontWeight.w800,
-                                            height: 1,
-                                          ),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                              Expanded(
-                                child: Container(
-                                  width: double.infinity,
-                                  margin: const EdgeInsets.fromLTRB(1, 0, 1, 1),
-                                  color: _fillColor(entry.type),
-                                  child: Center(
-                                    child: Text(
-                                      _symbol(entry.type),
-                                      style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w800, height: 1),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      );
-                    },
+                  child: _buildMonthGrid(
+                    cells,
+                    today,
+                    enableInteraction: true,
+                    faded: false,
                   ),
                 ),
                 Container(
-                  color: const Color(0xFFF1F2F6),
+                  margin: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+                  height: nextMonthPreviewHeight,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border.all(color: _ShiftMasterTheme.dayCellBorder, width: 0.5),
+                  ),
+                  child: _buildMonthGrid(
+                    nextMonthCells,
+                    today,
+                    enableInteraction: false,
+                    faded: true,
+                  ),
+                ),
+                Container(
+                  color: _ShiftMasterTheme.toolbarBackground,
                   padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
                   child: FilledButton(
                     onPressed: () => _showAddShiftSheet(context),
@@ -460,6 +597,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  void _showSnackBar(BuildContext context, String message, {bool isError = false}) {
+    if (!context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? _ShiftMasterTheme.errorBannerBackground : null,
+        contentTextStyle: isError
+            ? const TextStyle(color: _ShiftMasterTheme.errorBannerForeground, fontWeight: FontWeight.w700)
+            : null,
+      ),
+    );
+  }
+
+  bool _isShiftTimeValid(ShiftType type, TimeOfDay? start, TimeOfDay? end) {
+    if (type == ShiftType.off) return true;
+    if (start == null || end == null) return false;
+    if (type == ShiftType.night) return true;
+    final startMinutes = start.hour * 60 + start.minute;
+    final endMinutes = end.hour * 60 + end.minute;
+    return endMinutes > startMinutes;
+  }
+
+  ShiftEntry _normalizeShiftForSave(ShiftEntry entry) {
+    if (entry.type == ShiftType.off) return const ShiftEntry(type: ShiftType.off);
+    final base = _controller.defaultEntryForType(entry.type);
+    return entry.copyWith(
+      startTime: entry.startTime ?? base.startTime,
+      endTime: entry.endTime ?? base.endTime,
+    );
+  }
+
+  bool _canOpenDesktopImage() {
+    return !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.linux);
+  }
+
   Future<void> _showTeamNameDialog(BuildContext context) async {
     final aController = TextEditingController(text: _controller.teamAName);
     final bController = TextEditingController(text: _controller.teamBName);
@@ -489,7 +666,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             FilledButton(
               onPressed: () async {
-                await _controller.setTeamNames(aController.text, bController.text);
+                final teamA = aController.text.trim();
+                final teamB = bController.text.trim();
+                if (teamA.isEmpty || teamB.isEmpty) {
+                  _showSnackBar(context, '팀 이름은 비어 있을 수 없습니다.', isError: true);
+                  return;
+                }
+                if (teamA == teamB) {
+                  _showSnackBar(context, '두 팀 이름이 동일합니다. 다르게 입력하세요.', isError: true);
+                  return;
+                }
+                await _controller.setTeamNames(teamA, teamB);
                 if (context.mounted) Navigator.pop(context);
               },
               child: const Text('\uc800\uc7a5'),
@@ -501,22 +688,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   String? _findDesktopImagePath(String baseName) {
-    return findDesktopImagePath(baseName, _imageExtensions);
+    if (!_canOpenDesktopImage()) return null;
+    try {
+      return findDesktopImagePath(baseName, _imageExtensions);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _openDesktopImage(BuildContext context, String baseName) async {
-    if (kIsWeb) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('웹에서는 바탕화면 파일 열기를 지원하지 않습니다.')),
-      );
+    if (!_canOpenDesktopImage()) {
+      _showSnackBar(context, '바탕화면 이미지 열기는 웹/모바일에서는 지원되지 않습니다.', isError: true);
       return;
     }
 
     final path = _findDesktopImagePath(baseName);
     if (path == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('바탕화면에 $baseName.(png/jpg/jpeg/webp/bmp) 파일이 없습니다.')),
-      );
+      _showSnackBar(context, '바탕화면에 $baseName.(png/jpg/jpeg/webp/bmp) 파일이 없습니다.', isError: true);
       return;
     }
 
@@ -527,9 +715,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     if (!context.mounted) return;
     if (!opened) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$baseName 파일을 열지 못했습니다.')),
-      );
+      _showSnackBar(context, '$baseName 파일을 열지 못했습니다.', isError: true);
     }
   }
 
@@ -545,7 +731,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         return Container(
           padding: EdgeInsets.fromLTRB(18, 14, 18, 14 + MediaQuery.of(context).viewInsets.bottom),
           decoration: const BoxDecoration(
-            color: Color(0xFFF6FBFF),
+            color: _ShiftMasterTheme.sheetBackground,
             borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
           ),
           child: StatefulBuilder(
@@ -644,12 +830,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Expanded(
                         child: FilledButton(
                           onPressed: () async {
-                            await _controller.setManualEntry(selectedDate, selected);
+                            final normalized = _normalizeShiftForSave(selected);
+                            if (!_isShiftTimeValid(normalized.type, normalized.startTime, normalized.endTime)) {
+                              _showSnackBar(context, '종료 시간이 시작 시간보다 빠릅니다.', isError: true);
+                              return;
+                            }
+                            await _controller.setManualEntry(selectedDate, normalized);
                             if (!context.mounted) return;
                             setModal(() {
                               selectedDate = selectedDate.add(const Duration(days: 1));
                               selected = _controller.getEntryForDate(selectedDate);
                             });
+                            _showSnackBar(context, '저장되었습니다.');
                           },
                           child: const Text('\uc800\uc7a5 + \ub2e4\uc74c'),
                         ),
@@ -679,7 +871,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 }
-
 
 
 
